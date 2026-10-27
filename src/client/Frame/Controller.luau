@@ -41,6 +41,9 @@ local pitch = CameraConfig.ThirdPerson.DefaultPitch
 local hullYaw = 0
 local vx, vz = 0, 0
 local bobPhase = 0
+local exitAt: CFrame? = nil -- hull CFrame sent with the exit request; the hull holds still until the server answers
+local exitSentAt = 0
+local cockpit: BasePart? = nil
 
 local function hudText()
 	local motionText = `motion {math.floor(motion * 100 + 0.5)}% ([ ] / D-pad L R)`
@@ -130,6 +133,14 @@ local function step(root: BasePart, model: Model, params: RaycastParams, dt: num
 
 	-- Walk: target velocity relative to the camera's yaw.
 	local input = moveInput()
+	if exitAt then
+		if os.clock() - exitSentAt > F.ExitTimeout then
+			exitAt = nil -- server refused (cooldown): keep walking
+		else
+			input = Vector2.zero
+			vx, vz = 0, 0
+		end
+	end
 	if input.Magnitude < 0.05 then
 		sprintToggle = false
 	end
@@ -240,6 +251,7 @@ local function enterPilot(model: Model, root: BasePart)
 	stick1, stick2, mouseDelta = Vector2.zero, Vector2.zero, Vector2.zero
 	sprintHeld, sprintToggle = false, false
 	vx, vz = 0, 0
+	exitAt = nil
 	local _, ry, _ = root.CFrame:ToOrientation()
 	hullYaw = math.deg(ry)
 	yaw = hullYaw
@@ -321,6 +333,26 @@ local function leavePilot()
 		local cam = workspace.CurrentCamera
 		cam.CameraSubject = humanoid
 	end
+	-- This client owns the character, so it puts itself down beside the Frame (a server PivotTo is overwritten).
+	local final = exitAt
+	exitAt = nil
+	if final and character and cockpit then
+		task.spawn(function()
+			local seat = cockpit:FindFirstChild("PilotSeat")
+			local waited = 0
+			while seat and seat.Parent and waited < F.ExitTimeout do
+				waited += task.wait()
+			end
+			local drop = final
+				* CFrame.new(
+					F.ExitOffset,
+					Scale.Gym.GroundTop - final.Position.Y + F.ExitDropHeight,
+					0
+				)
+			local _, ry, _ = final:ToOrientation()
+			character:PivotTo(CFrame.new(drop.Position) * CFrame.Angles(0, ry, 0))
+		end)
+	end
 	hudText()
 end
 
@@ -328,6 +360,7 @@ function Controller.start()
 	local gym = workspace:WaitForChild("Gym")
 	local model = gym:WaitForChild("Frame") :: Model
 	local root = model:WaitForChild("Root") :: BasePart
+	cockpit = model:WaitForChild("Cockpit") :: BasePart
 	local board = Net.remote("FrameBoard")
 	local exit = Net.remote("FrameExit")
 
@@ -336,7 +369,13 @@ function Controller.start()
 			return Enum.ContextActionResult.Pass
 		end
 		if piloting then
-			exit:FireServer()
+			if not exitAt then
+				local cf = root.CFrame
+				local _, ry, _ = cf:ToOrientation()
+				exitAt = cf
+				exitSentAt = os.clock()
+				exit:FireServer(cf.Position.X, cf.Position.Z, ry)
+			end
 			return Enum.ContextActionResult.Sink
 		end
 		local character = player.Character

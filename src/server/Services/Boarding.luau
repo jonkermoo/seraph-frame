@@ -35,8 +35,11 @@ function Boarding.start(frame: FrameRefs)
 		return true
 	end
 
-	-- Puts the hull back on the ground (yaw only) and anchors it; drops the pilot beside it if asked.
-	local function release(player: Player, placePilot: boolean)
+	-- Puts the hull back on the ground (yaw only) and anchors it. `final` is the pilot client's last hull
+	-- position (x, z, yaw radians); the replicated root lags behind it, so the hull would jump back.
+	-- The pilot's client places its own character beside the Frame: it owns the character, so a server
+	-- PivotTo is overwritten by the client.
+	local function release(player: Player, final: { x: number, z: number, yaw: number }?)
 		if pilot ~= player then
 			return
 		end
@@ -47,9 +50,12 @@ function Boarding.start(frame: FrameRefs)
 		end
 		local root = frame.root
 		local _, yaw, _ = root.CFrame:ToOrientation()
-		local p = root.Position
+		local x, z = root.Position.X, root.Position.Z
+		if final then
+			x, z, yaw = final.x, final.z, final.yaw
+		end
 		root.Anchored = true
-		root.CFrame = CFrame.new(p.X, Scale.Gym.GroundTop + cfg.RootHeight, p.Z)
+		root.CFrame = CFrame.new(x, Scale.Gym.GroundTop + cfg.RootHeight, z)
 			* CFrame.Angles(0, yaw, 0)
 		root.AssemblyLinearVelocity = Vector3.zero
 		root.AssemblyAngularVelocity = Vector3.zero
@@ -58,14 +64,29 @@ function Boarding.start(frame: FrameRefs)
 
 		local character = player.Character
 		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-		if character and humanoid then
+		if humanoid then
 			humanoid.PlatformStand = false
-			if placePilot then
-				local drop = root.CFrame
-					* CFrame.new(cfg.ExitOffset, Scale.Gym.GroundTop - root.Position.Y + 3, 0)
-				character:PivotTo(CFrame.new(drop.Position) * CFrame.Angles(0, yaw, 0))
-			end
 		end
+	end
+
+	-- Validates the exit payload: finite numbers, close to where the server last saw the hull.
+	local function readFinal(
+		x: unknown,
+		z: unknown,
+		yaw: unknown
+	): { x: number, z: number, yaw: number }?
+		if typeof(x) ~= "number" or typeof(z) ~= "number" or typeof(yaw) ~= "number" then
+			return nil
+		end
+		local nx, nz, ny = x :: number, z :: number, yaw :: number
+		if nx ~= nx or nz ~= nz or ny ~= ny or math.abs(ny) > math.pi * 4 then
+			return nil
+		end
+		local p = frame.root.Position
+		if (Vector2.new(nx, nz) - Vector2.new(p.X, p.Z)).Magnitude > cfg.ExitTrust then
+			return nil
+		end
+		return { x = nx, z = nz, yaw = ny }
 	end
 
 	Net.remote("FrameBoard").OnServerEvent:Connect(function(player: Player)
@@ -100,19 +121,20 @@ function Boarding.start(frame: FrameRefs)
 		frame.model:SetAttribute("PilotId", player.UserId)
 	end)
 
-	Net.remote("FrameExit").OnServerEvent:Connect(function(player: Player)
-		if rateOk(player) then
-			release(player, true)
-		end
-	end)
+	Net.remote("FrameExit").OnServerEvent
+		:Connect(function(player: Player, x: unknown, z: unknown, yaw: unknown)
+			if rateOk(player) then
+				release(player, readFinal(x, z, yaw))
+			end
+		end)
 
 	Players.PlayerAdded:Connect(function(player)
 		player.CharacterRemoving:Connect(function()
-			release(player, false)
+			release(player, nil)
 		end)
 	end)
 	Players.PlayerRemoving:Connect(function(player)
-		release(player, false)
+		release(player, nil)
 		lastRequest[player] = nil
 	end)
 end

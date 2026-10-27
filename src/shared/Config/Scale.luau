@@ -33,6 +33,9 @@ return table.freeze({
 		BoardRange = 70, -- flat distance from the Frame root a pilot may board from
 		ExitOffset = 40, -- pilot is put down this far to the Frame's right on exit
 		BoardCooldown = 0.5, -- seconds between board/exit requests per player
+		ExitTrust = 60, -- server accepts the pilot's final hull position this close to its replicated one
+		ExitTimeout = 1, -- seconds the hull holds still waiting for the server to accept an exit
+		ExitDropHeight = 3, -- pilot is put down this far above the ground
 	}),
 
 	Seraph = table.freeze({

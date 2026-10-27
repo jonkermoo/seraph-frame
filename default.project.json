@@ -9,9 +9,6 @@
       "Server": { "$path": "src/server" }
     },
     "StarterPlayer": {
-      "$properties": {
-        "GameSettingsAvatar": "R6"
-      },
       "StarterPlayerScripts": {
         "Client": { "$path": "src/client" }
       }

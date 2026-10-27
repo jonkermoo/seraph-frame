@@ -7,7 +7,7 @@ local Net = {}
 Net.Messages = table.freeze({
 	Ping = "Ping",
 	FrameBoard = "FrameBoard", -- client -> server, no payload: board the Frame you stand next to
-	FrameExit = "FrameExit", -- client -> server, no payload: leave the Frame you pilot
+	FrameExit = "FrameExit", -- client -> server (x, z, yaw radians): leave the Frame, final hull position
 })
 
 export type MessageName = "Ping" | "FrameBoard" | "FrameExit"
