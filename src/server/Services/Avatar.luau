@@ -1,9 +1,12 @@
 --!strict
--- Pilots are R6 whatever the place's avatar setting says (StarterPlayer.GameSettingsAvatar from the
--- project file did not reach Studio play tests). Each character is the player's own avatar on an R6 rig,
--- spawned on the gym's pilot pad.
+-- Every pilot is our own plain R6 body; players' Roblox avatars are never loaded (DECISIONS: custom
+-- pilots only). R6 whatever the place's avatar setting says (StarterPlayer.GameSettingsAvatar from the
+-- project file did not reach Studio play tests). Spawned on the gym's pilot pad.
 
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Scale = require(ReplicatedStorage.Shared.Config.Scale)
 
 local Avatar = {}
 
@@ -16,25 +19,50 @@ local function spawnPoint(): CFrame
 	return CFrame.new(0, 10, 0)
 end
 
+-- A blank description: default R6 body parts, no face, hair, accessories or clothing, one grey colour.
+local function plainDescription(): HumanoidDescription
+	local desc = Instance.new("HumanoidDescription")
+	local c = Scale.Pilot.Color
+	local grey = Color3.fromRGB(c.r, c.g, c.b)
+	desc.HeadColor = grey
+	desc.TorsoColor = grey
+	desc.LeftArmColor = grey
+	desc.RightArmColor = grey
+	desc.LeftLegColor = grey
+	desc.RightLegColor = grey
+	return desc
+end
+
+local function stripLooks(model: Model)
+	for _, d in model:GetDescendants() do
+		if
+			d:IsA("Accessory")
+			or d:IsA("Clothing")
+			or d:IsA("ShirtGraphic")
+			or d:IsA("CharacterMesh")
+			or (d:IsA("Decal") and d.Name == "face")
+		then
+			d:Destroy()
+		end
+	end
+end
+
 local function spawnR6(player: Player)
 	if not player.Parent then
 		return
 	end
-	local okDesc, desc = pcall(function()
-		return Players:GetHumanoidDescriptionFromUserId(math.max(player.UserId, 1))
-	end)
-	if not okDesc then
-		desc = Instance.new("HumanoidDescription")
-	end
+	local desc = plainDescription()
 	local okModel, model = pcall(function()
 		return Players:CreateHumanoidModelFromDescription(desc, Enum.HumanoidRigType.R6)
 	end)
 	if not okModel or not model then
-		warn("[Avatar] R6 build failed, default spawn:", model)
-		player:LoadCharacter()
+		-- Never fall back to LoadCharacter: that would load the player's own avatar.
+		warn("[Avatar] R6 build failed, retrying:", model)
+		task.delay(Players.RespawnTime, spawnR6, player)
 		return
 	end
 
+	stripLooks(model)
 	local old = player.Character
 	model.Name = player.Name
 	model:PivotTo(spawnPoint())

@@ -8,7 +8,8 @@ return table.freeze({
 	StudsPerMetre = SPM,
 
 	Pilot = table.freeze({
-		HeightR6 = 5, -- default R6 avatar, ~1.43 m at 3.5 studs/m
+		HeightR6 = 5, -- plain R6 body (fixed size; R6 ignores body scales), ~1.43 m at 3.5 studs/m
+		Color = table.freeze({ r = 163, g = 162, b = 165 }), -- placeholder grey until the pilot art exists
 	}),
 
 	Frame = table.freeze({

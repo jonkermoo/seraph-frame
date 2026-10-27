@@ -31,6 +31,19 @@ check("Frame walk is 42 studs/s", Scale.Frame.WalkSpeed == 42)
 check("Frame sprint is 112 studs/s", Scale.Frame.SprintSpeed == 112)
 check("real gravity at scale is 34.3", near(Scale.Gravity.Real, 34.335))
 check("engine gravity stays default", Scale.Gravity.Engine == 196.2)
+check(
+	"pilot grey is valid RGB",
+	(function()
+		local c = Scale.Pilot.Color
+		for _, v in { c.r, c.g, c.b } do
+			if v < 0 or v > 255 or v % 1 ~= 0 then
+				return false
+			end
+		end
+		return true
+	end)()
+)
+check("Frame is 28x the pilot", near(Scale.Frame.Height / Scale.Pilot.HeightR6, 28))
 check("eye below Frame top", Scale.Frame.EyeHeight < Scale.Frame.Height)
 check("cockpit below eye", Scale.Frame.CockpitHeight < Scale.Frame.EyeHeight)
 check("root below cockpit", Scale.Frame.RootHeight < Scale.Frame.CockpitHeight)
