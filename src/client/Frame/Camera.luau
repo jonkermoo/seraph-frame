@@ -211,6 +211,15 @@ local function thirdPersonCFrame(view: View, dt: number): (CFrame, { BasePart })
 	if pos.Y < minY then
 		pos = Vector3.new(pos.X, minY, pos.Z)
 	end
+	-- Also fade anything hiding the legs and hips: a low block can cover them while the focus line clears its roof.
+	local params = occluders :: RaycastParams
+	for _, h in TP.FadeProbeHeights do
+		local probe = Vector3.new(rootPos.X, Scale.Gym.GroundTop + h, rootPos.Z)
+		local hit = workspace:Raycast(pos, probe - pos, params)
+		if hit and hit.Instance:IsA("BasePart") then
+			table.insert(faded, hit.Instance)
+		end
+	end
 	-- Look along the boom's rotation (shoulder offset keeps the Frame left of centre).
 	return CFrame.new(pos) * rot, faded
 end

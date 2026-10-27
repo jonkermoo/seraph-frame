@@ -29,6 +29,7 @@ return table.freeze({
 		GroundClearance = 6,
 		FadeTransparency = 0.75, -- buildings between camera and Frame fade instead of the camera snapping in
 		FadeRate = 4, -- transparency per second
+		FadeProbeHeights = table.freeze({ 15, 40, 66 }), -- feet, knees, hips: extra fade rays to the hull
 		HullFade = 0.8, -- own hull fades if the camera is ever inside it
 	}),
 

@@ -105,6 +105,10 @@ function Boarding.start(frame: FrameRefs)
 		end
 
 		pilot = player
+		-- Anchor at once on death: waiting for CharacterRemoving left the hull drifting ~1 s.
+		humanoid.Died:Once(function()
+			release(player, nil)
+		end)
 		humanoid.PlatformStand = true
 		hrp.CFrame = frame.cockpit.CFrame
 		local weld = Instance.new("Weld")

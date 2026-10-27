@@ -340,7 +340,11 @@ local function leavePilot()
 		task.spawn(function()
 			local seat = cockpit:FindFirstChild("PilotSeat")
 			local waited = 0
-			while seat and seat.Parent and waited < F.ExitTimeout do
+			-- Wait for the weld to go and PlatformStand to clear; pivoting before either left the pilot lying down.
+			while
+				((seat and seat.Parent) or (humanoid and humanoid.PlatformStand))
+				and waited < F.ExitTimeout
+			do
 				waited += task.wait()
 			end
 			local drop = final
@@ -351,6 +355,15 @@ local function leavePilot()
 				)
 			local _, ry, _ = final:ToOrientation()
 			character:PivotTo(CFrame.new(drop.Position) * CFrame.Angles(0, ry, 0))
+			local hrp = character:FindFirstChild("HumanoidRootPart")
+			if hrp and hrp:IsA("BasePart") then
+				hrp.AssemblyLinearVelocity = Vector3.zero
+				hrp.AssemblyAngularVelocity = Vector3.zero
+			end
+			if humanoid then
+				humanoid.PlatformStand = false
+				humanoid:ChangeState(Enum.HumanoidStateType.Running)
+			end
 		end)
 	end
 	hudText()
