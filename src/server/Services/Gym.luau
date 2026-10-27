@@ -1,5 +1,5 @@
 --!strict
--- P1 scale gym: builds the flat test area with block-outs (ground, pilot spawn, 140-stud Frame,
+-- P1 scale gym: builds the flat test area with block-outs (ground, pilot spawn,
 -- 300-stud Seraph, 4 city-scale buildings, a few car-sized props and a 10 m post).
 -- Every piece is a plain box so the camera can test "inside a building" exactly.
 
@@ -10,13 +10,7 @@ local Scale = require(ReplicatedStorage.Shared.Config.Scale)
 
 local Gym = {}
 
-export type FrameRefs = {
-	model: Model,
-	root: BasePart,
-	cockpit: BasePart,
-}
-
-type PartSpec = {
+export type PartSpec = {
 	name: string,
 	size: Vector3,
 	pos: Vector3, -- centre, relative to the model's ground point
@@ -26,72 +20,8 @@ type PartSpec = {
 	head: boolean?, -- hidden locally in first person
 }
 
-local HULL = Color3.fromRGB(88, 96, 120)
-local HULL_DARK = Color3.fromRGB(52, 56, 70)
-local VISOR = Color3.fromRGB(255, 150, 40)
 local SERAPH = Color3.fromRGB(226, 222, 210)
 local CORE = Color3.fromRGB(200, 20, 30)
-
--- Frame block-out, facing -Z, ground point at the origin. Top of the horn is at 140.
-local FRAME_PARTS: { PartSpec } = {
-	{
-		name = "LegL",
-		size = Vector3.new(16, 62, 18),
-		pos = Vector3.new(-13, 31, 0),
-		color = HULL_DARK,
-	},
-	{
-		name = "LegR",
-		size = Vector3.new(16, 62, 18),
-		pos = Vector3.new(13, 31, 0),
-		color = HULL_DARK,
-	},
-	{ name = "Pelvis", size = Vector3.new(42, 12, 22), pos = Vector3.new(0, 66, 0), color = HULL },
-	{ name = "Torso", size = Vector3.new(46, 40, 26), pos = Vector3.new(0, 92, 0), color = HULL },
-	{
-		name = "ArmL",
-		size = Vector3.new(12, 56, 14),
-		pos = Vector3.new(-31, 80, 0),
-		color = HULL_DARK,
-	},
-	{
-		name = "ArmR",
-		size = Vector3.new(12, 56, 14),
-		pos = Vector3.new(31, 80, 0),
-		color = HULL_DARK,
-	},
-	{ name = "PadL", size = Vector3.new(18, 12, 20), pos = Vector3.new(-31, 108, 0), color = HULL },
-	{ name = "PadR", size = Vector3.new(18, 12, 20), pos = Vector3.new(31, 108, 0), color = HULL },
-	{
-		name = "Neck",
-		size = Vector3.new(10, 6, 10),
-		pos = Vector3.new(0, 115, 0),
-		color = HULL_DARK,
-		head = true,
-	},
-	{
-		name = "Head",
-		size = Vector3.new(16, 18, 18),
-		pos = Vector3.new(0, 125, 0),
-		color = HULL,
-		head = true,
-	},
-	{
-		name = "Visor",
-		size = Vector3.new(12, 3, 1),
-		pos = Vector3.new(0, 127, -9.5),
-		color = VISOR,
-		material = Enum.Material.Neon,
-		head = true,
-	},
-	{
-		name = "Horn",
-		size = Vector3.new(2, 6, 2),
-		pos = Vector3.new(0, 137, -2),
-		color = VISOR,
-		head = true,
-	},
-}
 
 -- Seraph block-out, facing +Z (toward the Frame). Top of the crown is at 300.
 local SERAPH_PARTS: { PartSpec } = {
@@ -133,7 +63,7 @@ local SERAPH_PARTS: { PartSpec } = {
 	},
 }
 
-local function part(spec: PartSpec, origin: CFrame, parent: Instance): BasePart
+function Gym.part(spec: PartSpec, origin: CFrame, parent: Instance): BasePart
 	local p = Instance.new("Part")
 	p.Name = spec.name
 	p.Size = spec.size
@@ -152,14 +82,8 @@ local function part(spec: PartSpec, origin: CFrame, parent: Instance): BasePart
 	return p
 end
 
-local function box(
-	name: string,
-	size: Vector3,
-	cf: CFrame,
-	color: Color3,
-	parent: Instance
-): BasePart
-	return part({ name = name, size = size, pos = Vector3.zero, color = color }, cf, parent)
+function Gym.box(name: string, size: Vector3, cf: CFrame, color: Color3, parent: Instance): BasePart
+	return Gym.part({ name = name, size = size, pos = Vector3.zero, color = color }, cf, parent)
 end
 
 -- Trap: a place's default Baseplate (top at y 0) z-fights a code-built ground. Lower it out of the way.
@@ -182,7 +106,7 @@ local function buildGround(gym: Instance)
 		for iz = 0, 1 do
 			local cx = (ix - 0.5) * t
 			local cz = (iz - 0.5) * t
-			local g = box(
+			local g = Gym.box(
 				"Tile",
 				Vector3.new(t, 4, t),
 				CFrame.new(cx, cfg.GroundTop - 2, cz),
@@ -201,7 +125,7 @@ local function buildCity(gym: Instance)
 	folder.Parent = gym
 	for i, b in Scale.Gym.Buildings do
 		local shade = 150 + i * 15
-		local p = box(
+		local p = Gym.box(
 			b.name,
 			Vector3.new(b.w, b.h, b.d),
 			CFrame.new(b.x, Scale.Gym.GroundTop + b.h / 2, b.z),
@@ -217,7 +141,7 @@ local function buildCity(gym: Instance)
 	props.Name = "Props"
 	props.Parent = gym
 	for i = 0, 4 do
-		local car = box(
+		local car = Gym.box(
 			"Car",
 			Vector3.new(7, 5, 16),
 			CFrame.new(-70, Scale.Gym.GroundTop + 2.5, -60 - i * 60),
@@ -227,7 +151,7 @@ local function buildCity(gym: Instance)
 		car.Anchored = true
 	end
 	local h = Scale.Gym.MarkerHeight
-	local post = box(
+	local post = Gym.box(
 		"Post10m",
 		Vector3.new(2, h, 2),
 		CFrame.new(80, Scale.Gym.GroundTop + h / 2, -40),
@@ -257,55 +181,11 @@ local function buildSeraph(gym: Instance)
 	local pos = Scale.Gym.SeraphPosition
 	local origin = CFrame.new(pos.x, Scale.Gym.GroundTop, pos.z) * CFrame.Angles(0, math.pi, 0)
 	for _, spec in SERAPH_PARTS do
-		part(spec, origin, model).Anchored = true
+		Gym.part(spec, origin, model).Anchored = true
 	end
 	model.WorldPivot = origin
 	model.ModelStreamingMode = Enum.ModelStreamingMode.Atomic
 	model.Parent = gym
-end
-
-local function buildFrame(gym: Instance): FrameRefs
-	local cfg = Scale.Frame
-	local pos = Scale.Gym.FramePosition
-	local origin = CFrame.new(pos.x, Scale.Gym.GroundTop, pos.z)
-	local model = Instance.new("Model")
-	model.Name = "Frame"
-
-	local root =
-		box("Root", Vector3.new(20, 20, 20), origin * CFrame.new(0, cfg.RootHeight, 0), HULL, model)
-	root.Transparency = 1
-	root.CanCollide = false
-	root.Anchored = true
-	model.PrimaryPart = root
-
-	local cockpit = box(
-		"Cockpit",
-		Vector3.new(6, 6, 10),
-		origin * CFrame.new(0, cfg.CockpitHeight, 6),
-		HULL_DARK,
-		model
-	)
-	cockpit.Transparency = 1
-	cockpit.CanCollide = false
-
-	local hull = { cockpit }
-	for _, spec in FRAME_PARTS do
-		table.insert(hull, part(spec, origin, model))
-	end
-	-- Trap: WeldConstraints re-record offsets when reactivated; use Weld with an explicit C0.
-	for _, p in hull do
-		local weld = Instance.new("Weld")
-		weld.Part0 = root
-		weld.Part1 = p
-		weld.C0 = root.CFrame:ToObjectSpace(p.CFrame)
-		weld.Parent = p
-	end
-
-	model.WorldPivot = origin
-	model.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
-	model:SetAttribute("PilotId", 0)
-	model.Parent = gym
-	return { model = model, root = root, cockpit = cockpit }
 end
 
 local function buildSpawn(gym: Instance)
@@ -331,7 +211,7 @@ local function addHaze()
 	end
 end
 
-function Gym.start(): FrameRefs
+function Gym.start()
 	lowerBaseplate()
 	addHaze()
 	local gym = Instance.new("Folder")
@@ -340,9 +220,7 @@ function Gym.start(): FrameRefs
 	buildCity(gym)
 	buildSeraph(gym)
 	buildSpawn(gym)
-	local refs = buildFrame(gym)
 	gym.Parent = workspace
-	return refs
 end
 
 return Gym

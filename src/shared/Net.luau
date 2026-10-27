@@ -8,9 +8,10 @@ Net.Messages = table.freeze({
 	Ping = "Ping",
 	FrameBoard = "FrameBoard", -- client -> server, no payload: board the Frame you stand next to
 	FrameExit = "FrameExit", -- client -> server (x, z, yaw radians): leave the Frame, final hull position
+	FrameAction = "FrameAction", -- client -> server (action: "dash" | "leap"): stamped on the hull for watchers
 })
 
-export type MessageName = "Ping" | "FrameBoard" | "FrameExit"
+export type MessageName = "Ping" | "FrameBoard" | "FrameExit" | "FrameAction"
 
 -- Roblox services are fetched lazily so the name table above stays testable in Lune.
 -- The server creates remotes; the client waits for them to replicate.

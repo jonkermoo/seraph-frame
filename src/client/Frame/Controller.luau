@@ -1,7 +1,7 @@
 --!strict
--- P1 block-out walk: board / exit the gym Frame and walk it on flat ground. No gait animation, no leap
--- or dash (that is P2's FrameMotor). The hull is network-owned by the pilot; this client sets its CFrame
--- each frame and the server anchors it back on exit.
+-- Pilots a Frame (P2): board / exit, then drive the client-owned hull with FrameMotor. The motor steps once
+-- per physics step (PreSimulation) and writes the hull's DriveVelocity / DriveUpright targets; physics
+-- moves the hull and resolves bumps with buildings and other Frames. The camera runs in RenderStep.
 -- Every input goes through ContextActionService with keyboard/mouse and gamepad bindings.
 
 local ContextActionService = game:GetService("ContextActionService")
@@ -12,8 +12,11 @@ local UserInputService = game:GetService("UserInputService")
 
 local CameraConfig = require(ReplicatedStorage.Shared.Config.Camera)
 local FrameCam = require(ReplicatedStorage.Shared.Rules.FrameCam)
+local FrameConfig = require(ReplicatedStorage.Shared.Config.Frame)
+local FrameMotor = require(ReplicatedStorage.Shared.Rules.FrameMotor)
 local Net = require(ReplicatedStorage.Shared.Net)
 local Scale = require(ReplicatedStorage.Shared.Config.Scale)
+local Autopilot = require(script.Parent.Autopilot)
 local Camera = require(script.Parent.Camera)
 local Hud = require(script.Parent.Hud)
 
@@ -21,38 +24,58 @@ local Controller = {}
 
 local player = Players.LocalPlayer
 local F = Scale.Frame
+local M = FrameConfig.Motor
 local LOOK = CameraConfig.Look
 local MOTION = CameraConfig.Motion
 
-local RENDER_NAME = "FrameGym"
+local RENDER_NAME = "FrameCamera"
 local PRIORITY = Enum.ContextActionPriority.High.Value
+local RAY_DOWN = 2000
+local ACTIONS = { "FrameMove", "FrameLook", "FrameSprint", "FrameDash", "FrameLeap" }
 
-local piloting = false
+type Hull = {
+	model: Model,
+	root: BasePart,
+	cockpit: BasePart,
+	drive: LinearVelocity,
+	upright: AlignOrientation,
+}
+
+local hulls: { [Model]: Hull } = {}
+local piloting: Hull? = nil
+local motor: FrameMotor.State = FrameMotor.new(0, M.DashCharges)
+local groundParams: RaycastParams? = nil
+local physicsConn: RBXScriptConnection? = nil
+local actionRemote: RemoteEvent? = nil
+
 local keys: { [Enum.KeyCode]: boolean } = {}
 local stick1 = Vector2.zero
 local stick2 = Vector2.zero
 local mouseDelta = Vector2.zero
 local sprintHeld = false
 local sprintToggle = false
+local dashPressed = false
+local leapPressed = false
+local leapHeld = false
 local motion = MOTION.Default
 
 local yaw = 0 -- camera look, degrees
 local pitch = CameraConfig.ThirdPerson.DefaultPitch
-local hullYaw = 0
-local vx, vz = 0, 0
 local bobPhase = 0
 local exitAt: CFrame? = nil -- hull CFrame sent with the exit request; the hull holds still until the server answers
 local exitSentAt = 0
-local cockpit: BasePart? = nil
+local autoTime = 0
+local hudAcc = 0
 
 local function hudText()
 	local motionText = `motion {math.floor(motion * 100 + 0.5)}% ([ ] / D-pad L R)`
 	if piloting then
+		local speed = math.sqrt(motor.vx * motor.vx + motor.vz * motor.vz) / Scale.StudsPerMetre
 		Hud.set(
-			`PILOTING  |  camera {string.upper(Camera.mode())} (T / D-pad up)  |  {motionText}  |  sprint Shift / L3  |  exit E / X`
+			`{string.upper(motor.gait)} {math.floor(speed)} m/s  dash x{math.floor(motor.dashCharge)}  |  sprint Shift / L3  |  dash Ctrl / B  |  leap Space / A (hold = higher)  |  camera T / D-pad up  |  {motionText}  |  exit E / X`
 		)
 	else
-		Hud.set(`On foot  |  walk to the Frame's feet, board with E / X  |  {motionText}`)
+		Hud.set(`On foot  |  walk to a Frame's feet, board with E / X  |  {motionText}`)
 	end
 end
 
@@ -91,98 +114,99 @@ local function moveInput(): Vector2
 	return v
 end
 
--- Moves the hull by (dx, dz) at waist height, stopping at buildings and sliding along their faces.
-local function collide(pos: Vector3, dx: number, dz: number, params: RaycastParams): Vector3
-	local delta = Vector3.new(dx, 0, dz)
-	for _ = 1, 2 do
-		if delta.Magnitude < 1e-4 then
-			break
+local function nearestOther(pos: Vector3): Vector3?
+	local best: Vector3? = nil
+	local bestDist = math.huge
+	for model, hull in hulls do
+		if hull ~= piloting and model.Parent then
+			local d = (hull.root.Position - pos).Magnitude
+			if d < bestDist then
+				best, bestDist = hull.root.Position, d
+			end
 		end
-		local probe = Vector3.new(pos.X, Scale.Gym.GroundTop + F.WaistHeight, pos.Z)
-		local hit = workspace:Spherecast(probe, F.HullRadius, delta, params)
-		if not hit then
-			return pos + delta
-		end
-		local unit = delta.Unit
-		local allowed = math.max(hit.Distance - 0.5, 0)
-		pos += unit * allowed
-		local rest = delta - unit * allowed
-		local n = Vector3.new(hit.Normal.X, 0, hit.Normal.Z)
-		if n.Magnitude < 1e-4 then
-			break
-		end
-		n = n.Unit
-		delta = rest - n * rest:Dot(n)
 	end
-	return pos
+	return best
 end
 
-local function step(root: BasePart, model: Model, params: RaycastParams, dt: number)
-	local cfgLook = LOOK
-	-- Look: mouse (degrees per pixel) + right stick (degrees per second, dead zone + expo).
-	local invert = if cfgLook.InvertY then -1 else 1
-	yaw -= mouseDelta.X * cfgLook.MouseDegPerPixel
-	pitch -= mouseDelta.Y * cfgLook.MouseDegPerPixel * invert
+-- One motor step per physics step: read what physics did, step the motor, write the drive targets.
+local function physicsStep(hull: Hull, dt: number)
+	local root = hull.root
+	local v = root.AssemblyLinearVelocity
+	FrameMotor.collide(motor, v.X, v.Z, M)
+
+	local pos = root.Position
+	local hit = workspace:Raycast(pos, Vector3.new(0, -RAY_DOWN, 0), groundParams :: RaycastParams)
+	local height = if hit then pos.Y - hit.Position.Y - F.RootHeight else nil
+
+	local stick = moveInput()
+	local input: FrameMotor.Input = {
+		moveX = stick.X,
+		moveY = stick.Y,
+		camYaw = yaw,
+		sprint = sprintHeld or sprintToggle,
+		dashPressed = dashPressed,
+		leapPressed = leapPressed,
+		leapHeld = leapHeld,
+	}
+	local auto = if RunService:IsStudio() then player:GetAttribute("FrameAutopilot") else nil
+	if auto == "loop" or auto == "ram" then
+		autoTime += dt
+		input = Autopilot.input(auto :: Autopilot.Mode, autoTime, dt, motor, pos, nearestOther(pos))
+		yaw = input.camYaw
+	end
+	dashPressed, leapPressed = false, false
+	if stick.Magnitude < 0.05 then
+		sprintToggle = false
+	end
+	if exitAt then
+		if os.clock() - exitSentAt > F.ExitTimeout then
+			exitAt = nil -- server refused (cooldown): keep driving
+		else
+			input.moveX, input.moveY = 0, 0
+			input.dashPressed, input.leapPressed, input.leapHeld = false, false, false
+			motor.vx, motor.vz = 0, 0
+		end
+	end
+
+	local before = motor.gait
+	FrameMotor.step(motor, input, { height = height }, M, dt)
+	local remote = actionRemote
+	if remote and motor.gait ~= before then
+		if motor.gait == "dash" then
+			remote:FireServer("dash")
+		elseif before == "windup" and motor.gait == "air" then
+			remote:FireServer("leap")
+		end
+	end
+
+	hull.drive.VectorVelocity = Vector3.new(motor.vx, motor.vy, motor.vz)
+	hull.upright.CFrame = CFrame.Angles(0, math.rad(motor.yaw), 0)
+end
+
+local function renderStep(hull: Hull, dt: number)
+	local invert = if LOOK.InvertY then -1 else 1
+	yaw -= mouseDelta.X * LOOK.MouseDegPerPixel
+	pitch -= mouseDelta.Y * LOOK.MouseDegPerPixel * invert
 	mouseDelta = Vector2.zero
-	yaw -= FrameCam.stick(stick2.X, cfgLook.GamepadDeadzone, cfgLook.GamepadExpo) * cfgLook.GamepadYawDegPerSec * dt
-	pitch += FrameCam.stick(stick2.Y, cfgLook.GamepadDeadzone, cfgLook.GamepadExpo) * cfgLook.GamepadPitchDegPerSec * dt * invert
+	yaw -= FrameCam.stick(stick2.X, LOOK.GamepadDeadzone, LOOK.GamepadExpo) * LOOK.GamepadYawDegPerSec * dt
+	pitch += FrameCam.stick(stick2.Y, LOOK.GamepadDeadzone, LOOK.GamepadExpo) * LOOK.GamepadPitchDegPerSec * dt * invert
 	yaw = FrameCam.wrap(yaw)
 	local pMin = math.min(CameraConfig.FirstPerson.PitchMin, CameraConfig.ThirdPerson.PitchMin)
 	local pMax = math.max(CameraConfig.FirstPerson.PitchMax, CameraConfig.ThirdPerson.PitchMax)
 	pitch = math.clamp(pitch, pMin, pMax)
 
-	-- Walk: target velocity relative to the camera's yaw.
-	local input = moveInput()
-	if exitAt then
-		if os.clock() - exitSentAt > F.ExitTimeout then
-			exitAt = nil -- server refused (cooldown): keep walking
-		else
-			input = Vector2.zero
-			vx, vz = 0, 0
-		end
+	local speed = math.sqrt(motor.vx * motor.vx + motor.vz * motor.vz)
+	local moving, sprintFrac = FrameCam.gait(speed, M.WalkSpeed, M.SprintSpeed)
+	if not motor.grounded or motor.gait == "dash" then
+		moving = 0 -- no footfalls in the air or mid-dash
 	end
-	if input.Magnitude < 0.05 then
-		sprintToggle = false
-	end
-	local sprinting = (sprintHeld or sprintToggle) and input.Y > 0.1
-	local maxSpeed = if sprinting then F.SprintSpeed else F.WalkSpeed
-	local look = CFrame.Angles(0, math.rad(yaw), 0)
-	local fwd = look.LookVector
-	local right = look.RightVector
-	local target = fwd * (input.Y * maxSpeed) + right * (input.X * maxSpeed * F.StrafeFactor)
-	local accel = if input.Magnitude > 0.05
-		then maxSpeed / (if sprinting then F.SprintAccelSeconds else F.AccelSeconds)
-		else F.WalkSpeed / F.StopSeconds
-	if not sprinting and math.sqrt(vx * vx + vz * vz) > F.WalkSpeed then
-		accel = F.SprintSpeed / F.StopSeconds -- coming out of a sprint
-	end
-	vx, vz = FrameCam.approach2(vx, vz, target.X, target.Z, accel * dt)
-	local speed = math.sqrt(vx * vx + vz * vz)
-
-	-- Hull turns toward the camera yaw while moving (slower at sprint).
-	local moving, sprintFrac = FrameCam.gait(speed, F.WalkSpeed, F.SprintSpeed)
-	if input.Magnitude > 0.05 then
-		local turn = FrameCam.lerp(F.TurnDegPerSec, F.SprintTurnDegPerSec, sprintFrac)
-		hullYaw = FrameCam.turnToward(hullYaw, yaw, turn * dt)
-	end
-
-	local pos = collide(root.Position, vx * dt, vz * dt, params)
-	if (pos - root.Position).Magnitude < speed * dt * 0.5 then
-		-- blocked: bleed speed so the bob does not keep running against a wall
-		vx, vz = FrameCam.approach2(vx, vz, 0, 0, F.SprintSpeed / F.StopSeconds * dt)
-	end
-	root.CFrame = CFrame.new(pos.X, Scale.Gym.GroundTop + F.RootHeight, pos.Z)
-		* CFrame.Angles(0, math.rad(hullYaw), 0)
-	root.AssemblyLinearVelocity = Vector3.zero
-	root.AssemblyAngularVelocity = Vector3.zero
-
 	local stepSeconds = FrameCam.lerp(MOTION.WalkStepSeconds, MOTION.SprintStepSeconds, sprintFrac)
 	bobPhase += dt / stepSeconds * moving
 
 	UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
 	Camera.update({
-		root = root,
-		model = model,
+		root = hull.root,
+		model = hull.model,
 		yaw = yaw,
 		pitch = pitch,
 		bobPhase = bobPhase,
@@ -190,6 +214,12 @@ local function step(root: BasePart, model: Model, params: RaycastParams, dt: num
 		sprint = sprintFrac,
 		motion = motion,
 	}, dt)
+
+	hudAcc += dt
+	if hudAcc >= 0.25 then
+		hudAcc = 0
+		hudText()
+	end
 end
 
 local function onMove(
@@ -238,38 +268,44 @@ local function onSprint(
 	return Enum.ContextActionResult.Sink
 end
 
-local function onSink(): Enum.ContextActionResult
+local function onDash(_: string, state: Enum.UserInputState): Enum.ContextActionResult
+	if state == Enum.UserInputState.Begin then
+		dashPressed = true
+	end
 	return Enum.ContextActionResult.Sink
 end
 
-local function enterPilot(model: Model, root: BasePart)
-	if piloting then
+local function onLeap(_: string, state: Enum.UserInputState): Enum.ContextActionResult
+	if state == Enum.UserInputState.Begin then
+		leapPressed = true
+		leapHeld = true
+	elseif state == Enum.UserInputState.End or state == Enum.UserInputState.Cancel then
+		leapHeld = false
+	end
+	return Enum.ContextActionResult.Sink
+end
+
+local function enterPilot(hull: Hull)
+	if piloting == hull then
 		return
 	end
-	piloting = true
+	piloting = hull
 	keys = {}
 	stick1, stick2, mouseDelta = Vector2.zero, Vector2.zero, Vector2.zero
-	sprintHeld, sprintToggle = false, false
-	vx, vz = 0, 0
+	sprintHeld, sprintToggle, dashPressed, leapPressed, leapHeld = false, false, false, false, false
 	exitAt = nil
-	local _, ry, _ = root.CFrame:ToOrientation()
-	hullYaw = math.deg(ry)
-	yaw = hullYaw
+	autoTime = 0
+	local _, ry, _ = hull.root.CFrame:ToOrientation()
+	motor = FrameMotor.new(math.deg(ry), M.DashCharges)
+	yaw = motor.yaw
 	pitch = CameraConfig.ThirdPerson.DefaultPitch
 
 	local params = RaycastParams.new()
-	params.FilterType = Enum.RaycastFilterType.Include
-	local gym = workspace:FindFirstChild("Gym")
-	local solid = {}
-	if gym then
-		for _, name in { "Buildings", "Seraph" } do
-			local f = gym:FindFirstChild(name)
-			if f then
-				table.insert(solid, f)
-			end
-		end
-	end
-	params.FilterDescendantsInstances = solid
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { hull.model }
+	params.CollisionGroup = FrameConfig.CollisionGroups.Hull
+	params.RespectCanCollide = true
+	groundParams = params
 
 	ContextActionService:BindActionAtPriority(
 		"FrameMove",
@@ -299,8 +335,16 @@ local function enterPilot(model: Model, root: BasePart)
 		Enum.KeyCode.ButtonL3
 	)
 	ContextActionService:BindActionAtPriority(
-		"FrameSink",
-		onSink,
+		"FrameDash",
+		onDash,
+		false,
+		PRIORITY,
+		Enum.KeyCode.LeftControl,
+		Enum.KeyCode.ButtonB
+	)
+	ContextActionService:BindActionAtPriority(
+		"FrameLeap",
+		onLeap,
 		false,
 		PRIORITY,
 		Enum.KeyCode.Space,
@@ -308,20 +352,28 @@ local function enterPilot(model: Model, root: BasePart)
 	)
 
 	setCharacterHidden(true)
-	Camera.enter(model)
+	Camera.enter(hull.model)
 	RunService:BindToRenderStep(RENDER_NAME, Enum.RenderPriority.Camera.Value + 1, function(dt)
-		step(root, model, params, dt)
+		renderStep(hull, dt)
+	end)
+	physicsConn = RunService.PreSimulation:Connect(function(dt)
+		physicsStep(hull, dt)
 	end)
 	hudText()
 end
 
 local function leavePilot()
-	if not piloting then
+	local hull = piloting
+	if not hull then
 		return
 	end
-	piloting = false
+	piloting = nil
 	RunService:UnbindFromRenderStep(RENDER_NAME)
-	for _, name in { "FrameMove", "FrameLook", "FrameSprint", "FrameSink" } do
+	if physicsConn then
+		physicsConn:Disconnect()
+		physicsConn = nil
+	end
+	for _, name in ACTIONS do
 		ContextActionService:UnbindAction(name)
 	end
 	Camera.leave()
@@ -336,9 +388,9 @@ local function leavePilot()
 	-- This client owns the character, so it puts itself down beside the Frame (a server PivotTo is overwritten).
 	local final = exitAt
 	exitAt = nil
-	if final and character and cockpit then
+	if final and character then
 		task.spawn(function()
-			local seat = cockpit:FindFirstChild("PilotSeat")
+			local seat = hull.cockpit:FindFirstChild("PilotSeat")
 			local waited = 0
 			-- Wait for the weld to go and PlatformStand to clear; pivoting before either left the pilot lying down.
 			while
@@ -347,12 +399,8 @@ local function leavePilot()
 			do
 				waited += task.wait()
 			end
-			local drop = final
-				* CFrame.new(
-					F.ExitOffset,
-					Scale.Gym.GroundTop - final.Position.Y + F.ExitDropHeight,
-					0
-				)
+			-- Beside the Frame on whatever it stands on (the hull is parked on the ground or roof below).
+			local drop = final * CFrame.new(F.ExitOffset, -F.RootHeight + F.ExitDropHeight, 0)
 			local _, ry, _ = final:ToOrientation()
 			character:PivotTo(CFrame.new(drop.Position) * CFrame.Angles(0, ry, 0))
 			local hrp = character:FindFirstChild("HumanoidRootPart")
@@ -369,21 +417,48 @@ local function leavePilot()
 	hudText()
 end
 
+local function sync()
+	for model, hull in hulls do
+		if model:GetAttribute("PilotId") == player.UserId then
+			enterPilot(hull)
+			return
+		end
+	end
+	leavePilot()
+end
+
+local function addHull(model: Instance)
+	if not model:IsA("Model") or model:GetAttribute("PilotId") == nil then
+		return
+	end
+	local root = model:WaitForChild("Root") :: BasePart
+	local hull: Hull = {
+		model = model,
+		root = root,
+		cockpit = model:WaitForChild("Cockpit") :: BasePart,
+		drive = root:WaitForChild("DriveVelocity") :: LinearVelocity,
+		upright = root:WaitForChild("DriveUpright") :: AlignOrientation,
+	}
+	hulls[model] = hull
+	model:GetAttributeChangedSignal("PilotId"):Connect(sync)
+	sync()
+end
+
 function Controller.start()
 	local gym = workspace:WaitForChild("Gym")
-	local model = gym:WaitForChild("Frame") :: Model
-	local root = model:WaitForChild("Root") :: BasePart
-	cockpit = model:WaitForChild("Cockpit") :: BasePart
 	local board = Net.remote("FrameBoard")
 	local exit = Net.remote("FrameExit")
+	actionRemote = Net.remote("FrameAction")
 
 	ContextActionService:BindAction("FrameInteract", function(_, state)
 		if state ~= Enum.UserInputState.Begin then
 			return Enum.ContextActionResult.Pass
 		end
-		if piloting then
-			if not exitAt then
-				local cf = root.CFrame
+		local hull = piloting
+		if hull then
+			-- Exit only standing on something and not mid-dash, so the parked hull matches what the pilot saw.
+			if not exitAt and motor.grounded and motor.dashLeft <= 0 then
+				local cf = hull.root.CFrame
 				local _, ry, _ = cf:ToOrientation()
 				exitAt = cf
 				exitSentAt = os.clock()
@@ -394,10 +469,12 @@ function Controller.start()
 		local character = player.Character
 		local hrp = character and character:FindFirstChild("HumanoidRootPart")
 		if hrp and hrp:IsA("BasePart") then
-			local flat = (hrp.Position - root.Position) * Vector3.new(1, 0, 1)
-			if flat.Magnitude <= F.BoardRange then
-				board:FireServer()
-				return Enum.ContextActionResult.Sink
+			for _, h in hulls do
+				local flat = (hrp.Position - h.root.Position) * Vector3.new(1, 0, 1)
+				if flat.Magnitude <= F.BoardRange and h.model:GetAttribute("PilotId") == 0 then
+					board:FireServer()
+					return Enum.ContextActionResult.Sink
+				end
 			end
 		end
 		return Enum.ContextActionResult.Pass
@@ -432,18 +509,15 @@ function Controller.start()
 		Enum.KeyCode.DPadRight
 	)
 
-	local function sync()
-		if model:GetAttribute("PilotId") == player.UserId then
-			enterPilot(model, root)
-		else
-			leavePilot()
-		end
-	end
-	model:GetAttributeChangedSignal("PilotId"):Connect(sync)
 	player.CharacterAdded:Connect(function()
 		leavePilot()
 	end)
-	sync()
+	gym.ChildAdded:Connect(function(child)
+		task.spawn(addHull, child)
+	end)
+	for _, child in gym:GetChildren() do
+		task.spawn(addHull, child)
+	end
 	hudText()
 end
 

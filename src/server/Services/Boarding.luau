@@ -1,30 +1,21 @@
 --!strict
--- Board / exit the gym Frame. The server welds the pilot into the cockpit and hands the hull to the
--- pilot's client (network owner), which walks it. On exit the hull is anchored back on the ground.
+-- Board / exit a Frame. Board takes the nearest free hull in range: the server welds the pilot into its
+-- cockpit and hands the hull to the pilot (Frame.board). Exit parks the hull at the pilot client's final
+-- position on the ground (or roof) below it.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Net = require(ReplicatedStorage.Shared.Net)
 local Scale = require(ReplicatedStorage.Shared.Config.Scale)
+local Frame = require(script.Parent.Frame)
 
 local Boarding = {}
 
-type FrameRefs = { model: Model, root: BasePart, cockpit: BasePart }
-
-function Boarding.start(frame: FrameRefs)
+function Boarding.start()
 	local cfg = Scale.Frame
-	local pilot: Player? = nil
-	local seatWeld: Weld? = nil
+	local seatWelds: { [Player]: Weld } = {}
 	local lastRequest: { [Player]: number } = {}
-
-	local function setHullCollide(on: boolean)
-		for _, p in frame.model:GetDescendants() do
-			if p:IsA("BasePart") and p ~= frame.root and p ~= frame.cockpit then
-				p.CanCollide = on
-			end
-		end
-	end
 
 	local function rateOk(player: Player): boolean
 		local now = os.clock()
@@ -35,32 +26,37 @@ function Boarding.start(frame: FrameRefs)
 		return true
 	end
 
-	-- Puts the hull back on the ground (yaw only) and anchors it. `final` is the pilot client's last hull
-	-- position (x, z, yaw radians); the replicated root lags behind it, so the hull would jump back.
-	-- The pilot's client places its own character beside the Frame: it owns the character, so a server
-	-- PivotTo is overwritten by the client.
+	-- Root CFrame for a hull parked at (x, z) facing yaw: on whatever the hull would stand on there.
+	local function parkCFrame(hull: Frame.Hull, x: number, z: number, yaw: number): CFrame
+		local top = hull.root.Position.Y + cfg.Height
+		local hit = workspace:Raycast(
+			Vector3.new(x, top, z),
+			Vector3.new(0, -(top - Scale.Gym.GroundTop + 50), 0),
+			Frame.groundParams(hull.model)
+		)
+		local groundY = if hit then hit.Position.Y else Scale.Gym.GroundTop
+		return CFrame.new(x, groundY + cfg.RootHeight, z) * CFrame.Angles(0, yaw, 0)
+	end
+
+	-- `final` is the pilot client's last hull position (x, z, yaw radians); the replicated root lags
+	-- behind it, so parking at the replicated one would make the hull jump back.
+	-- The pilot's client places its own character beside the Frame (it owns the character).
 	local function release(player: Player, final: { x: number, z: number, yaw: number }?)
-		if pilot ~= player then
+		local hull = Frame.hullOf(player)
+		if not hull then
 			return
 		end
-		pilot = nil
-		if seatWeld then
-			seatWeld:Destroy()
-			seatWeld = nil
+		local weld = seatWelds[player]
+		if weld then
+			weld:Destroy()
+			seatWelds[player] = nil
 		end
-		local root = frame.root
-		local _, yaw, _ = root.CFrame:ToOrientation()
-		local x, z = root.Position.X, root.Position.Z
+		local _, yaw, _ = hull.root.CFrame:ToOrientation()
+		local x, z = hull.root.Position.X, hull.root.Position.Z
 		if final then
 			x, z, yaw = final.x, final.z, final.yaw
 		end
-		root.Anchored = true
-		root.CFrame = CFrame.new(x, Scale.Gym.GroundTop + cfg.RootHeight, z)
-			* CFrame.Angles(0, yaw, 0)
-		root.AssemblyLinearVelocity = Vector3.zero
-		root.AssemblyAngularVelocity = Vector3.zero
-		setHullCollide(true)
-		frame.model:SetAttribute("PilotId", 0)
+		Frame.park(hull, parkCFrame(hull, x, z, yaw))
 
 		local character = player.Character
 		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
@@ -71,6 +67,7 @@ function Boarding.start(frame: FrameRefs)
 
 	-- Validates the exit payload: finite numbers, close to where the server last saw the hull.
 	local function readFinal(
+		hull: Frame.Hull,
 		x: unknown,
 		z: unknown,
 		yaw: unknown
@@ -82,7 +79,7 @@ function Boarding.start(frame: FrameRefs)
 		if nx ~= nx or nz ~= nz or ny ~= ny or math.abs(ny) > math.pi * 4 then
 			return nil
 		end
-		local p = frame.root.Position
+		local p = hull.root.Position
 		if (Vector2.new(nx, nz) - Vector2.new(p.X, p.Z)).Magnitude > cfg.ExitTrust then
 			return nil
 		end
@@ -90,7 +87,7 @@ function Boarding.start(frame: FrameRefs)
 	end
 
 	Net.remote("FrameBoard").OnServerEvent:Connect(function(player: Player)
-		if not rateOk(player) or pilot ~= nil then
+		if not rateOk(player) or Frame.hullOf(player) then
 			return
 		end
 		local character = player.Character
@@ -99,36 +96,42 @@ function Boarding.start(frame: FrameRefs)
 		if not (humanoid and hrp and hrp:IsA("BasePart")) or humanoid.Health <= 0 then
 			return
 		end
-		local flat = (hrp.Position - frame.root.Position) * Vector3.new(1, 0, 1)
-		if flat.Magnitude > cfg.BoardRange then
+		local best: Frame.Hull? = nil
+		local bestDist = cfg.BoardRange
+		for _, hull in Frame.hulls() do
+			if hull.pilot == nil then
+				local flat = (hrp.Position - hull.root.Position) * Vector3.new(1, 0, 1)
+				if flat.Magnitude <= bestDist then
+					best, bestDist = hull, flat.Magnitude
+				end
+			end
+		end
+		local hull = best
+		if not hull then
 			return
 		end
 
-		pilot = player
 		-- Anchor at once on death: waiting for CharacterRemoving left the hull drifting ~1 s.
 		humanoid.Died:Once(function()
 			release(player, nil)
 		end)
 		humanoid.PlatformStand = true
-		hrp.CFrame = frame.cockpit.CFrame
+		hrp.CFrame = hull.cockpit.CFrame
 		local weld = Instance.new("Weld")
 		weld.Name = "PilotSeat"
-		weld.Part0 = frame.cockpit
+		weld.Part0 = hull.cockpit
 		weld.Part1 = hrp
 		weld.C0 = CFrame.identity
-		weld.Parent = frame.cockpit
-		seatWeld = weld
-
-		setHullCollide(false)
-		frame.root.Anchored = false
-		frame.root:SetNetworkOwner(player)
-		frame.model:SetAttribute("PilotId", player.UserId)
+		weld.Parent = hull.cockpit
+		seatWelds[player] = weld
+		Frame.board(hull, player)
 	end)
 
 	Net.remote("FrameExit").OnServerEvent
 		:Connect(function(player: Player, x: unknown, z: unknown, yaw: unknown)
-			if rateOk(player) then
-				release(player, readFinal(x, z, yaw))
+			local hull = Frame.hullOf(player)
+			if hull and rateOk(player) then
+				release(player, readFinal(hull, x, z, yaw))
 			end
 		end)
 

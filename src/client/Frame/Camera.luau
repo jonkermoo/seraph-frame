@@ -190,7 +190,8 @@ end
 
 local function thirdPersonCFrame(view: View, dt: number): (CFrame, { BasePart })
 	local rootPos = view.root.Position
-	local focus = Vector3.new(rootPos.X, Scale.Gym.GroundTop + TP.FocusHeight, rootPos.Z)
+	local feetY = rootPos.Y - Scale.Frame.RootHeight -- follows the hull up in a leap and onto roofs
+	local focus = Vector3.new(rootPos.X, feetY + TP.FocusHeight, rootPos.Z)
 	local pitch = math.clamp(view.pitch, TP.PitchMin, TP.PitchMax)
 	local rot = CFrame.Angles(0, math.rad(view.yaw), 0) * CFrame.Angles(math.rad(pitch), 0, 0)
 
@@ -214,7 +215,7 @@ local function thirdPersonCFrame(view: View, dt: number): (CFrame, { BasePart })
 	-- Also fade anything hiding the legs and hips: a low block can cover them while the focus line clears its roof.
 	local params = occluders :: RaycastParams
 	for _, h in TP.FadeProbeHeights do
-		local probe = Vector3.new(rootPos.X, Scale.Gym.GroundTop + h, rootPos.Z)
+		local probe = Vector3.new(rootPos.X, feetY + h, rootPos.Z)
 		local hit = workspace:Raycast(pos, probe - pos, params)
 		if hit and hit.Instance:IsA("BasePart") then
 			table.insert(faded, hit.Instance)
