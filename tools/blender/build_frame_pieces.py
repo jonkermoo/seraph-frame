@@ -233,20 +233,9 @@ def fit(mesh, size):
     return round(worst, 2)
 
 
-def main():
-    rig_path, out_dir = rig.parse_args()
-    os.makedirs(out_dir, exist_ok=True)
-    with open(rig_path) as f:
-        data = json.load(f)
-    joints = rig.mirrored(data["joints"])
-    slots = rig.mirrored(data["slots"])
-    pos = {j["name"]: Vector(j["pos"]) for j in joints}
-    for obj in list(bpy.data.objects):
-        bpy.data.objects.remove(obj, do_unlink=True)
-    ink = cel.ink_material()
+def build_pieces(slots, pos, arm, ink):
+    """Every slot's piece as parts on the rig: (parts, [(slot, part)] for the swap slot, report rows, materials)."""
     mats = {c: cel.cel_material(c, rig.hex_colour(c)) for c in (PLATE, TRIM, GLOW)}
-    arm = rig.build_armature(joints)
-
     rows, swap_objs, parts = [], [], []
     for slot in slots:
         kind = slot_kind(slot["name"])
@@ -259,6 +248,22 @@ def main():
             if kind == SWAP["slot"]:
                 swap_objs.append((slot, obj))
             rows.append((slot["name"], colour, tris(mesh), slot["tris"], fit(mesh, slot["size"])))
+    return parts, swap_objs, rows, mats
+
+
+def main():
+    rig_path, out_dir = rig.parse_args()
+    os.makedirs(out_dir, exist_ok=True)
+    with open(rig_path) as f:
+        data = json.load(f)
+    joints = rig.mirrored(data["joints"])
+    slots = rig.mirrored(data["slots"])
+    pos = {j["name"]: Vector(j["pos"]) for j in joints}
+    for obj in list(bpy.data.objects):
+        bpy.data.objects.remove(obj, do_unlink=True)
+    ink = cel.ink_material()
+    arm = rig.build_armature(joints)
+    parts, swap_objs, rows, mats = build_pieces(slots, pos, arm, ink)
     pilot = rig.pilot_marker(ink)
 
     cam = cel.setup_render(out_dir)
@@ -294,4 +299,5 @@ def main():
     print("PIECES_DONE", len(parts), "parts", total, "tris", "worst fit", worst, "tolerance", FIT_TOLERANCE)
 
 
-main()
+if __name__ == "__main__":
+    main()

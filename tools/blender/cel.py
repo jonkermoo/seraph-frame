@@ -32,6 +32,35 @@ def cel_material(name, colour):
     return mat
 
 
+def palette_material(name, image):
+    """The same two-tone toon, but the colour comes from a small palette texture (one pixel per tone, picked by UV)."""
+    mat = bpy.data.materials.new("cel_" + name)
+    mat.use_nodes = True
+    nt = mat.node_tree
+    nt.nodes.clear()
+    diffuse = nt.nodes.new("ShaderNodeBsdfDiffuse")
+    to_rgb = nt.nodes.new("ShaderNodeShaderToRGB")
+    ramp = nt.nodes.new("ShaderNodeValToRGB")
+    ramp.color_ramp.interpolation = "CONSTANT"
+    ramp.color_ramp.elements[0].color = (0.55, 0.55, 0.62, 1.0)
+    ramp.color_ramp.elements[1].position = 0.5
+    ramp.color_ramp.elements[1].color = (1.0, 1.0, 1.0, 1.0)
+    tex = nt.nodes.new("ShaderNodeTexImage")
+    tex.image = image
+    tex.interpolation = "Closest"
+    shade = nt.nodes.new("ShaderNodeVectorMath")
+    shade.operation = "MULTIPLY"
+    emit = nt.nodes.new("ShaderNodeEmission")
+    out = nt.nodes.new("ShaderNodeOutputMaterial")
+    nt.links.new(diffuse.outputs[0], to_rgb.inputs[0])
+    nt.links.new(to_rgb.outputs[0], ramp.inputs[0])
+    nt.links.new(ramp.outputs[0], shade.inputs[0])
+    nt.links.new(tex.outputs[0], shade.inputs[1])
+    nt.links.new(shade.outputs[0], emit.inputs[0])
+    nt.links.new(emit.outputs[0], out.inputs[0])
+    return mat
+
+
 def ink_material():
     mat = bpy.data.materials.new("ink")
     mat.use_nodes = True
@@ -115,6 +144,21 @@ def shoot(cam, name, yaw_deg, objs, out_dir, pitch_deg=8):
     cam.data.clip_end = dist * 3
     bpy.context.scene.render.filepath = os.path.join(out_dir, name + ".png")
     bpy.ops.render.render(write_still=True)
+
+
+def side_by_side(names, out_name, out_dir):
+    """Join renders (same height) left to right into one image."""
+    import numpy as np
+
+    images = [bpy.data.images.load(os.path.join(out_dir, n + ".png")) for n in names]
+    h = images[0].size[1]
+    strips = [np.array(im.pixels[:]).reshape(h, im.size[0], 4) for im in images]
+    joined = np.concatenate(strips, axis=1)
+    out = bpy.data.images.new(out_name, joined.shape[1], h)
+    out.pixels = joined.ravel()
+    out.filepath_raw = os.path.join(out_dir, out_name + ".png")
+    out.file_format = "PNG"
+    out.save()
 
 
 def bounds_world(objs):
