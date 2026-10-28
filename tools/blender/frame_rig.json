@@ -1,0 +1,33 @@
+{
+  "about": "Frame template rig v2: 15 joints and 22 armour slots at the 140-stud size. Body type: small head, V-shaped torso down to a waist point, narrow hips, long thin legs in a wide stance with tall boots, long arms. Blender axes: Z up, -Y is the Frame's front (Roblox -Z), +X is the Frame's left; Roblox (X, Y, Z) = Blender (-X, Z, Y). Units are studs. Entries with mirror=true are the left side; the right side is the same with X negated and L swapped for R. A slot's taper [x, y] shrinks its box's bottom face; along [a, b] lines the box up with the bone from joint a to joint b.",
+  "height": 140,
+  "bodyTris": 25000,
+  "partBudget": 30,
+  "joints": [
+    { "name": "Root", "parent": "", "pos": [0, 0, 74] },
+    { "name": "Spine", "parent": "Root", "pos": [0, 0, 90] },
+    { "name": "Neck", "parent": "Spine", "pos": [0, -1, 121] },
+    { "name": "ShoulderL", "parent": "Spine", "pos": [15, -1, 110], "mirror": true },
+    { "name": "ElbowL", "parent": "ShoulderL", "pos": [17, 0, 96], "mirror": true },
+    { "name": "WristL", "parent": "ElbowL", "pos": [19, -1, 79], "mirror": true },
+    { "name": "HipL", "parent": "Root", "pos": [4.5, 0, 72], "mirror": true },
+    { "name": "KneeL", "parent": "HipL", "pos": [10, -1, 51], "mirror": true },
+    { "name": "AnkleL", "parent": "KneeL", "pos": [13.5, 1, 18], "mirror": true }
+  ],
+  "slots": [
+    { "name": "Head", "joint": "Neck", "centre": [0, -2, 127.5], "size": [9, 11, 12], "tris": 2500, "colour": "E8C547" },
+    { "name": "Chest", "joint": "Spine", "centre": [0, 0, 106], "size": [30, 16, 30], "taper": [0.2, 0.7], "tris": 3500, "colour": "D9534F" },
+    { "name": "BackUnit", "joint": "Spine", "centre": [0, 10, 110], "size": [14, 6, 18], "tris": 1000, "colour": "8E5BA8" },
+    { "name": "Waist", "joint": "Root", "centre": [0, 0, 82], "size": [10, 11, 14], "taper": [0.8, 0.9], "tris": 600, "colour": "5B7DB8" },
+    { "name": "SideL", "joint": "Root", "centre": [6.5, 0, 74], "size": [4, 10, 10], "tris": 300, "colour": "4FA3A5", "mirror": true },
+    { "name": "ShoulderL", "joint": "ShoulderL", "centre": [17, -1, 114], "size": [8, 12, 10], "tris": 1200, "colour": "E07B39", "mirror": true },
+    { "name": "UpperArmL", "joint": "ShoulderL", "centre": [16, -0.5, 103], "size": [5, 6, 12], "along": ["ShoulderL", "ElbowL"], "tris": 400, "colour": "A7C957", "mirror": true },
+    { "name": "ForearmL", "joint": "ElbowL", "centre": [18, -0.5, 87.5], "size": [6, 7, 16], "along": ["ElbowL", "WristL"], "tris": 600, "colour": "6A994E", "mirror": true },
+    { "name": "HandL", "joint": "WristL", "centre": [19.5, -1.5, 72], "size": [3.5, 8, 13], "tris": 1500, "colour": "F2A6C4", "mirror": true },
+    { "name": "ThighL", "joint": "HipL", "centre": [7.3, -0.5, 61.5], "size": [7, 8, 20], "along": ["HipL", "KneeL"], "tris": 600, "colour": "3D6FA3", "mirror": true },
+    { "name": "KneeL", "joint": "KneeL", "centre": [10, -4.5, 51.5], "size": [5, 3, 6], "tris": 250, "colour": "F4D35E", "mirror": true },
+    { "name": "ShinL", "joint": "KneeL", "centre": [11.6, 0, 35.5], "size": [6, 7, 27], "along": ["KneeL", "AnkleL"], "tris": 700, "colour": "2A9D8F", "mirror": true },
+    { "name": "FootL", "joint": "AnkleL", "centre": [13.5, -3, 10], "size": [7, 16, 20], "tris": 1500, "colour": "9C6644", "mirror": true }
+  ],
+  "trimTrisReserve": 3000
+}
