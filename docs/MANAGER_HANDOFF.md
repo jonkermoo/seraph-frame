@@ -19,7 +19,8 @@ Updated: 2026-10-27.
 | combat, seraphs, story, hq, art, tech | design drafting (01–06) | idle |
 | mission-zones | drafted 07 (mission zones) | done |
 | p1-scale-gym | built P1 | done (signed off) |
-| p2-frame-motor | builds P2 in its own worktree | working |
+| p2-frame-motor | builds P2 in its own worktree | waiting for Studio |
+| model-tests | tests Blender models (feeds P5/P7) | working |
 | Studio test runner | owns Studio and the main desktop folder, Rojo port 34873 | idle |
 
 ## Branches
@@ -30,7 +31,8 @@ Each session updates its own row. Prototype branches are throwaway (not merged).
 | `main` | manager | template + docs | — | green |
 | `docs/manager-plan` | manager | this file + `PROTOTYPES.md` | — | PR open |
 | `proto/p1-scale-gym` | p1-scale-gym | P1 scale gym (throwaway) | `5325dab` | done, not merged |
-| `proto/p2-frame-motor` | p2-frame-motor | P2 Frame motor, cut from P1 (throwaway) | — | working |
+| `proto/p2-frame-motor` | p2-frame-motor | P2 Frame motor, cut from P1 (throwaway) | `d313c61` | waiting for Studio |
+| `models/blender-tests` | model-tests | Blender model tests (scripts only) | — | working |
 
 ## Open items
 1. P2 started 2026-10-27. Still open to start in parallel: P3/P4/P7/P8. Keep from P1 for M1:
